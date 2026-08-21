@@ -185,8 +185,10 @@ jobs:
             cancelled) state=error ;;
             *) state=failure ;;
           esac
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           gh api --method POST \
             "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
             -f state="$state" \
             -f context='shift-report/private-baseline' \
-            -f description="Private baseline validation: ${JOB_STATUS}"
+            -f description="Private baseline validation: ${JOB_STATUS}" \
+            -f target_url="$run_url"
