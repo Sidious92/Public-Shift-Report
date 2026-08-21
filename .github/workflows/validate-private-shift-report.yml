@@ -1,0 +1,172 @@
+name: Validate private Shift Report baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.ci-trigger'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shift-report-private-validation
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: Sidious92/Shift-Report-New
+  SOURCE_REF: 51fa15d81f6a1acf0debc48c8eaf3d2f4b49fe02
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout CI repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Require read-only source credential
+        shell: bash
+        env:
+          SOURCE_TOKEN: ${{ secrets.SHIFT_REPORT_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SOURCE_TOKEN}" ]; then
+            echo 'Missing repository secret SHIFT_REPORT_READ_TOKEN.' >&2
+            echo 'Use a fine-grained token with Contents: Read-only for Sidious92/Shift-Report-New.' >&2
+            exit 2
+          fi
+
+      - name: Checkout private source ephemerally
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SHIFT_REPORT_READ_TOKEN }}
+          path: private-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact source and data governance
+        working-directory: private-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$SOURCE_REF" || {
+            echo "Unexpected source SHA: $actual" >&2
+            exit 3
+          }
+          if git ls-files | grep -E '(^|/)DB/' >/dev/null; then
+            echo 'Tracked DB/ content detected. CI refuses to continue.' >&2
+            exit 4
+          fi
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax-check every JavaScript file
+        working-directory: private-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find . -type f -name '*.js' -not -path './.git/*' -print0)
+
+      - name: Validate local index assets
+        working-directory: private-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          class AssetParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.assets = []
+              def handle_starttag(self, tag, attrs):
+                  values = dict(attrs)
+                  if tag == 'script' and values.get('src'):
+                      self.assets.append(values['src'])
+                  if tag == 'link' and values.get('href'):
+                      self.assets.append(values['href'])
+
+          parser = AssetParser()
+          parser.feed(Path('index.html').read_text(encoding='utf-8'))
+          missing = []
+          for asset in parser.assets:
+              parsed = urlsplit(asset)
+              if parsed.scheme or parsed.netloc:
+                  continue
+              target = parsed.path.lstrip('/')
+              if target and not Path(target).is_file():
+                  missing.append(target)
+          if missing:
+              raise SystemExit('Missing local assets:\n' + '\n'.join(sorted(set(missing))))
+          print(f'Local assets verified: {len(parser.assets)}')
+          PY
+
+      - name: Run canonical Node gates from private workflows
+        working-directory: private-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/shift-report-tests.txt
+          import re
+          from pathlib import Path
+
+          workflows = [
+              Path('.github/workflows/reliability-validation.yml'),
+              Path('.github/workflows/validate-enterprise-branch.yml'),
+          ]
+          tests = []
+          seen = set()
+          for workflow in workflows:
+              text = workflow.read_text(encoding='utf-8')
+              for match in re.findall(r'\bnode\s+(tests/[A-Za-z0-9_./-]+\.js)\b', text):
+                  if match not in seen:
+                      seen.add(match)
+                      tests.append(match)
+          if not tests:
+              raise SystemExit('No canonical Node tests discovered')
+          for test in tests:
+              if not Path(test).is_file():
+                  raise SystemExit(f'Canonical test missing: {test}')
+              print(test)
+          PY
+
+          count=0
+          while IFS= read -r test; do
+            echo "::group::$test"
+            node "$test"
+            echo '::endgroup::'
+            count=$((count + 1))
+          done < /tmp/shift-report-tests.txt
+          echo "Canonical Node gates passed: $count"
+
+      - name: Ensure tests did not persist workspace data
+        working-directory: private-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo 'Tests left files or modified the private checkout:' >&2
+            git status --short >&2
+            exit 5
+          fi
+
+      - name: Remove private source workspace
+        if: always()
+        shell: bash
+        run: |
+          rm -rf private-src /tmp/shift-report-tests.txt
