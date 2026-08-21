@@ -17,13 +17,12 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: Sidious92/Shift-Report-New
-  SOURCE_REF: 1524e02187b5f9cabaa4fd3cf764e0bb40e54400
+  SOURCE_REF: 7c8985527cca4637e3a17ae69cfa02d6fe26894b
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout CI repository
         uses: actions/checkout@v4
@@ -36,11 +35,7 @@ jobs:
           SOURCE_TOKEN: ${{ secrets.SHIFT_REPORT_READ_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${SOURCE_TOKEN}" ]; then
-            echo 'Missing repository secret SHIFT_REPORT_READ_TOKEN.' >&2
-            echo 'Use a fine-grained token with Contents: Read-only for Sidious92/Shift-Report-New.' >&2
-            exit 2
-          fi
+          test -n "$SOURCE_TOKEN" || { echo 'Missing SHIFT_REPORT_READ_TOKEN' >&2; exit 2; }
 
       - name: Checkout private source ephemerally
         uses: actions/checkout@v4
@@ -57,11 +52,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          test "$actual" = "$SOURCE_REF" || {
-            echo "Unexpected source SHA: $actual" >&2
-            exit 3
-          }
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
           if git ls-files | grep -E '(^|/)DB/' >/dev/null; then
             echo 'Tracked DB/ content detected. CI refuses to continue.' >&2
             exit 4
@@ -77,9 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r -d '' file; do
-            node --check "$file"
-          done < <(find . -type f -name '*.js' -not -path './.git/*' -print0)
+          while IFS= read -r -d '' file; do node --check "$file"; done < <(find . -type f -name '*.js' -not -path './.git/*' -print0)
 
       - name: Validate local index assets
         working-directory: private-src
@@ -90,34 +79,24 @@ jobs:
           from html.parser import HTMLParser
           from pathlib import Path
           from urllib.parse import urlsplit
-
-          class AssetParser(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.assets = []
+          class P(HTMLParser):
+              def __init__(self): super().__init__(); self.assets=[]
               def handle_starttag(self, tag, attrs):
-                  values = dict(attrs)
-                  if tag == 'script' and values.get('src'):
-                      self.assets.append(values['src'])
-                  if tag == 'link' and values.get('href'):
-                      self.assets.append(values['href'])
-
-          parser = AssetParser()
-          parser.feed(Path('index.html').read_text(encoding='utf-8'))
-          missing = []
-          for asset in parser.assets:
-              parsed = urlsplit(asset)
-              if parsed.scheme or parsed.netloc:
-                  continue
-              target = parsed.path.lstrip('/')
-              if target and not Path(target).is_file():
-                  missing.append(target)
-          if missing:
-              raise SystemExit('Missing local assets:\n' + '\n'.join(sorted(set(missing))))
-          print(f'Local assets verified: {len(parser.assets)}')
+                  a=dict(attrs)
+                  if tag=='script' and a.get('src'): self.assets.append(a['src'])
+                  if tag=='link' and a.get('href'): self.assets.append(a['href'])
+          p=P(); p.feed(Path('index.html').read_text(encoding='utf-8'))
+          missing=[]
+          for asset in p.assets:
+              u=urlsplit(asset)
+              if u.scheme or u.netloc: continue
+              target=u.path.lstrip('/')
+              if target and not Path(target).is_file(): missing.append(target)
+          if missing: raise SystemExit('Missing local assets:\n'+'\n'.join(sorted(set(missing))))
+          print(f'Local assets verified: {len(p.assets)}')
           PY
 
-      - name: Run all canonical Node gates and collect failures
+      - name: Run all workflow-referenced Node test gates
         working-directory: private-src
         shell: bash
         run: |
@@ -125,48 +104,25 @@ jobs:
           python - <<'PY' > /tmp/shift-report-tests.txt
           import re
           from pathlib import Path
-
-          workflows = [
-              Path('.github/workflows/reliability-validation.yml'),
-              Path('.github/workflows/validate-enterprise-branch.yml'),
-          ]
-          tests = []
-          seen = set()
-          for workflow in workflows:
-              text = workflow.read_text(encoding='utf-8')
-              for match in re.findall(r'\bnode\s+(tests/[A-Za-z0-9_./-]+\.js)\b', text):
-                  if match not in seen:
-                      seen.add(match)
-                      tests.append(match)
-          if not tests:
-              raise SystemExit('No canonical Node tests discovered')
+          tests=[]; seen=set()
+          for workflow in sorted(Path('.github/workflows').glob('*.y*ml')):
+              text=workflow.read_text(encoding='utf-8')
+              for test in re.findall(r'\bnode\s+(tests/[A-Za-z0-9_./-]+\.js)\b', text):
+                  if test not in seen:
+                      seen.add(test); tests.append(test)
+          if not tests: raise SystemExit('No workflow-referenced Node tests discovered')
           for test in tests:
-              if not Path(test).is_file():
-                  raise SystemExit(f'Canonical test missing: {test}')
+              if not Path(test).is_file(): raise SystemExit(f'Workflow test missing: {test}')
               print(test)
           PY
-
-          total=0
-          failures=0
-          : > /tmp/shift-report-failures.txt
+          total=0; failures=0; : > /tmp/shift-report-failures.txt
           while IFS= read -r test; do
-            total=$((total + 1))
-            echo "::group::$test"
-            if node "$test"; then
-              echo "PASS: $test"
-            else
-              failures=$((failures + 1))
-              echo "$test" >> /tmp/shift-report-failures.txt
-              echo "FAIL: $test"
-            fi
+            total=$((total + 1)); echo "::group::$test"
+            if node "$test"; then echo "PASS: $test"; else failures=$((failures + 1)); echo "$test" >> /tmp/shift-report-failures.txt; echo "FAIL: $test"; fi
             echo '::endgroup::'
           done < /tmp/shift-report-tests.txt
-          echo "Canonical Node gates executed: $total; failures: $failures"
-          if [ "$failures" -gt 0 ]; then
-            echo 'Failed gates:' >&2
-            cat /tmp/shift-report-failures.txt >&2
-            exit 1
-          fi
+          echo "Workflow Node gates executed: $total; failures: $failures"
+          if [ "$failures" -gt 0 ]; then echo 'Failed gates:' >&2; cat /tmp/shift-report-failures.txt >&2; exit 1; fi
 
       - name: Ensure tests did not persist workspace data
         if: success()
@@ -183,8 +139,7 @@ jobs:
       - name: Remove private source workspace
         if: always()
         shell: bash
-        run: |
-          rm -rf private-src /tmp/shift-report-tests.txt /tmp/shift-report-failures.txt
+        run: rm -rf private-src /tmp/shift-report-tests.txt /tmp/shift-report-failures.txt
 
       - name: Publish generic CI result
         if: always()
@@ -194,15 +149,6 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           set -euo pipefail
-          case "$JOB_STATUS" in
-            success) state=success ;;
-            cancelled) state=error ;;
-            *) state=failure ;;
-          esac
+          case "$JOB_STATUS" in success) state=success;; cancelled) state=error;; *) state=failure;; esac
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="$state" \
-            -f context='shift-report/private-baseline' \
-            -f description="Private baseline validation: ${JOB_STATUS}" \
-            -f target_url="$run_url"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" -f state="$state" -f context='shift-report/private-baseline' -f description="Private baseline validation: ${JOB_STATUS}" -f target_url="$run_url"
