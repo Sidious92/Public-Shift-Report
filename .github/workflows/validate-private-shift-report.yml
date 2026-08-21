@@ -117,7 +117,7 @@ jobs:
           print(f'Local assets verified: {len(parser.assets)}')
           PY
 
-      - name: Run canonical Node gates from private workflows
+      - name: Run all canonical Node gates and collect failures
         working-directory: private-src
         shell: bash
         run: |
@@ -146,16 +146,30 @@ jobs:
               print(test)
           PY
 
-          count=0
+          total=0
+          failures=0
+          : > /tmp/shift-report-failures.txt
           while IFS= read -r test; do
+            total=$((total + 1))
             echo "::group::$test"
-            node "$test"
+            if node "$test"; then
+              echo "PASS: $test"
+            else
+              failures=$((failures + 1))
+              echo "$test" >> /tmp/shift-report-failures.txt
+              echo "FAIL: $test"
+            fi
             echo '::endgroup::'
-            count=$((count + 1))
           done < /tmp/shift-report-tests.txt
-          echo "Canonical Node gates passed: $count"
+          echo "Canonical Node gates executed: $total; failures: $failures"
+          if [ "$failures" -gt 0 ]; then
+            echo 'Failed gates:' >&2
+            cat /tmp/shift-report-failures.txt >&2
+            exit 1
+          fi
 
       - name: Ensure tests did not persist workspace data
+        if: success()
         working-directory: private-src
         shell: bash
         run: |
@@ -170,7 +184,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -rf private-src /tmp/shift-report-tests.txt
+          rm -rf private-src /tmp/shift-report-tests.txt /tmp/shift-report-failures.txt
 
       - name: Publish generic CI result
         if: always()
