@@ -17,7 +17,7 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: Sidious92/Shift-Report-New
-  SOURCE_REF: 2f00a820c6e85d16ae29166215055923e4305ddc
+  SOURCE_REF: 9824ff1b5f0a1561fced0531701c7ccabca72f2b
 
 jobs:
   validate:
