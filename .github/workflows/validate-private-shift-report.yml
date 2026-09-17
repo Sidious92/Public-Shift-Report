@@ -17,7 +17,7 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: Sidious92/Shift-Report-New
-  SOURCE_REF: f879cc6936d507031a913091a5a6b0c793e7dfd5
+  SOURCE_REF: 150648f6465a36594f4f7845a7052817ac92aa40
 
 jobs:
   validate:
@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python - <<'PY' > /dev/null
           from html.parser import HTMLParser
           from pathlib import Path
           from urllib.parse import urlsplit
