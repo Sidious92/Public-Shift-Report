@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY' > /dev/null
+          python - <<'PY'
           from html.parser import HTMLParser
           from pathlib import Path
           from urllib.parse import urlsplit
