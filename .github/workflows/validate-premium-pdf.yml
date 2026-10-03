@@ -12,7 +12,7 @@ permissions:
 
 env:
   SOURCE_REPOSITORY: Sidious92/Shift-Report-New
-  SOURCE_REF: 3317cafa828c2cbaf5b4d3b4766d72f8edb12b9c
+  SOURCE_REF: 6cc2039b995655a9be80b364a5390c38d18ab6f7
 
 jobs:
   validate-premium-pdf:
