@@ -1,0 +1,69 @@
+name: Validate premium Shift Report PDF
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.pdf-trigger'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Sidious92/Shift-Report-New
+  SOURCE_REF: 3317cafa828c2cbaf5b4d3b4766d72f8edb12b9c
+
+jobs:
+  validate-premium-pdf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout CI repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout private source ephemerally
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          token: ${{ secrets.SHIFT_REPORT_READ_TOKEN }}
+          path: private-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate premium PDF contract
+        working-directory: private-src
+        run: |
+          node --check src/native/pdfmake-section-order.js
+          node --check src/native/pdfmake-brand-header-fix.js
+          node --check src/native/pdfmake-plus-logo-offset.js
+          node --check tests/pdf-premium-header-validation.js
+          node --check tests/pdf-premium-visual-sample.js
+          node tests/pdf-premium-header-validation.js
+          node tests/report-preview-validation.js
+
+      - name: Generate premium PDF visual sample
+        working-directory: private-src
+        env:
+          PDF_PREMIUM_ARTIFACT_DIR: ${{ runner.temp }}/shift-report-premium-pdf
+        run: node tests/pdf-premium-visual-sample.js
+
+      - name: Upload premium PDF sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: shift-report-premium-header
+          path: ${{ runner.temp }}/shift-report-premium-pdf/*.pdf
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove private source workspace
+        if: always()
+        run: rm -rf private-src
