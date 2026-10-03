@@ -17,7 +17,7 @@ concurrency:
 
 env:
   SOURCE_REPOSITORY: Sidious92/Shift-Report-New
-  SOURCE_REF: 0e62845932bfad430a971e21f84e819c4690a0c4
+  SOURCE_REF: a253fafc5b3db7f6fcabf54dbe98b6a242b02d9c
 
 jobs:
   validate:
@@ -135,6 +135,23 @@ jobs:
             git status --short >&2
             exit 5
           fi
+
+      - name: Generate PDF visual samples
+        if: success()
+        working-directory: private-src
+        shell: bash
+        env:
+          PDF_OPT_ARTIFACT_DIR: ${{ runner.temp }}/shift-report-pdf-opt
+        run: node tests/pdf-report-optimization-validation.js
+
+      - name: Upload PDF visual samples
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shift-report-pdf-opt-samples
+          path: ${{ runner.temp }}/shift-report-pdf-opt/*.pdf
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Remove private source workspace
         if: always()
